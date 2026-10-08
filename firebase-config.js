@@ -12,4 +12,4 @@ export const firebaseConfig = {
 // 2) OPTIONAL — after you've built your Android APK (README "Make a real APK"), upload it somewhere
 //    with a direct download link (GitHub Releases, Netlify, Google Drive direct link...) and paste that link here.
 //    The host's "Get the app" QR code will then download the APK. Leave it empty to share the web link instead.
-export const apkUrl = "https://polite-cuchufli-f9c122.netlify.app/";
+export const apkUrl = "https://hamza5xp.github.io/";
