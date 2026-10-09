@@ -1,8 +1,0 @@
-[{
-      "relation": ["delegate_permission/common.handle_all_urls"],
-      "target": {
-        "namespace": "android_app",
-        "package_name": "com.hamza5xp.studyduel",
-        "sha256_cert_fingerprints": ["05:8A:09:2D:50:06:74:A2:80:D1:04:F9:10:85:47:26:1F:D1:C6:5F:D7:1F:C4:5A:3E:BE:50:AD:C1:CD:2E:F4"]
-      }
-    }]
