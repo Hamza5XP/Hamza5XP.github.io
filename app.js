@@ -254,6 +254,9 @@ const randChars = (chars, n) => {
 };
 const genCode = () => randChars(ALPHA, 6);
 const genKey = () => randChars(KEYCHARS, 16);
+const genJoinCode = () => randChars(ALPHA, 8);
+const cleanCode = x => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const fmtCode = c => (c && c.length === 8) ? `${c.slice(0, 4)}-${c.slice(4)}` : (c || "");
 const BASE = () => location.origin + location.pathname.replace(/[^/]*$/, "");
 const inviteLink = () => `${BASE()}?join=${S.party}.${S.info.key}`;
 const appLink = () => (apkUrl && apkUrl.trim()) || BASE();
@@ -305,11 +308,50 @@ async function newRound() {
   await saveSettings({ round: (S.settings.round || 1) + 1, start: tt, end: addDays(tt, dur - 1) });
   await safe(() => S.db.doc(P("meta/result")).delete());
 }
+async function publishJoinCode(key) {
+  for (let i = 0; i < 4; i++) {
+    const jc = genJoinCode();
+    if (await tryDo(() => S.db.doc("joinCodes/" + jc).set({ party: S.party, key, owner: S.myId }))) return jc;
+  }
+  return null;
+}
+async function ensureJoinCode() {
+  if (!isHost() || isSolo() || !S.info || !S.info.key) return false;
+  const jc = await publishJoinCode(S.info.key);
+  if (!jc) return false;
+  await safe(() => S.db.doc("parties/" + S.party).set({ ...S.info, joinCode: jc }));
+  return true;
+}
 async function rotateInvite() {
   if (!hostOnly()) return;
-  const res = await safe(() => S.db.doc("parties/" + S.party).set({ ...S.info, key: genKey() }));
+  const base = { ...S.info }, oldJc = base.joinCode, key = genKey();
+  if (!(await tryDo(() => S.db.doc("parties/" + S.party).set({ ...base, key })))) { toast(t("err.generic")); return; }
+  const jc = await publishJoinCode(key);
+  await tryDo(() => S.db.doc("parties/" + S.party).set({ ...base, key, joinCode: jc }));
+  if (oldJc) await tryDo(() => S.db.doc("joinCodes/" + oldJc).delete());
   toast(t("invite.new.done"));
-  return res;
+}
+
+/* ---------- theme (light / dark / follow phone) ---------- */
+function effectiveTheme() {
+  const th = LS.get("theme");
+  if (th === "light" || th === "dark") return th;
+  return window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+function applyTheme() {
+  const th = LS.get("theme");
+  const root = document.documentElement;
+  if (th === "light" || th === "dark") root.dataset.theme = th; else delete root.dataset.theme;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", effectiveTheme() === "dark" ? "#12111b" : "#7c5cff");
+}
+function toggleTheme() {
+  LS.set("theme", effectiveTheme() === "dark" ? "light" : "dark");
+  applyTheme();
+  renderChips();
+}
+if (window.matchMedia) {
+  try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { applyTheme(); renderChips(); }); } catch (e) {}
 }
 
 /* ---------- header chips ---------- */
@@ -317,6 +359,7 @@ function renderChips() {
   const c = $("#chips");
   c.replaceChildren();
   c.append(h("div", { class: "chip link", onclick: toggleLang }, h("b", { text: "🌐 " + t("lang.switch") })));
+  c.append(h("div", { class: "chip link", title: t("theme.toggle"), onclick: toggleTheme }, h("b", { text: effectiveTheme() === "dark" ? "☀️" : "🌙" })));
   if (S.party && S.info) {
     if (isSolo()) c.append(h("div", { class: "chip" }, h("b", { text: t("chip.solo") })));
     else c.append(h("div", { class: "chip" }, "👥 ", h("b", { text: `${Object.keys(S.players).length}/${MAX_PLAYERS}` })));
@@ -381,22 +424,35 @@ function renderGate() {
   if (key === "full") { g.append(infoCard("😬", t("full.title"), t("full.text"), h("button", { class: "btn ghost", text: t("leave.party"), onclick: () => leaveParty() }))); return; }
 
   if (key === "mode") {
+    const code = h("input", { class: "codein", maxlength: "9", placeholder: "ABCD-EFGH", autocomplete: "off", autocapitalize: "characters", spellcheck: "false" });
+    code.addEventListener("input", () => { const c = cleanCode(code.value).slice(0, 8); code.value = c.length > 4 ? `${c.slice(0, 4)}-${c.slice(4)}` : c; });
+    code.addEventListener("keydown", e => { if (e.key === "Enter") joinWithCode(code.value); });
+    const step = (n, icon, label) => h("div", { class: "step" }, h("i", { text: icon }), h("b", { text: String(n) }), label);
     g.append(
-      h("div", { class: "card center hero", style: "padding:24px 18px" },
-        h("div", { class: "avrow" }, ...AVATARS.slice(0, 5).map((a, i) => h("span", { class: "float", style: `animation-delay:${i * .25}s`, text: a }))),
-        h("h2", { style: "font-size:24px;font-weight:900", text: t("mode.title") }),
-        h("div", { class: "muted", style: "margin-top:4px", text: t("mode.sub") })),
-      h("div", { class: "modes" },
-        h("div", { class: "card" },
-          h("div", { class: "big", text: "🧍" }), h("h3", { text: t("solo.title") }),
-          h("div", { class: "muted", style: "margin-top:4px", text: t("solo.desc") }),
-          h("button", { class: "btn", text: t("solo.btn"), onclick: () => startProfile("solo") })),
-        h("div", { class: "card" },
-          h("div", { class: "big", text: "👥" }), h("h3", { text: t("group.title") }),
-          h("div", { class: "muted", style: "margin-top:4px", text: t("group.desc", { n: MAX_PLAYERS - 1 }) }),
-          h("button", { class: "btn", text: t("group.btn"), onclick: () => startProfile("group") }))),
-      h("div", { class: "card", style: "margin-top:14px" }, cardTitle("🔑", t("invited.title").replace(/ 🔑$/, "")),
-        h("div", { class: "muted", style: "margin-top:-6px", text: t("invited.text") })));
+      h("div", { class: "landing" },
+        h("div", { class: "orb o1" }), h("div", { class: "orb o2" }),
+        h("div", { class: "orbit" }, ...AVATARS.slice(0, 5).map((a, i) => h("span", { style: `--i:${i};--s:${[1, 3, 5, 3, 1][i]}`, text: a }))),
+        h("h1", { class: "ltitle", text: t("mode.title") }),
+        h("p", { class: "lsub", text: t("mode.sub") }),
+        h("div", { class: "steps" }, step(1, "📝", t("mode.step1")), step(2, "⭐", t("mode.step2")), step(3, "🎁", t("mode.step3"))),
+        h("div", { class: "feats" }, h("span", { text: t("mode.f1") }), h("span", { text: t("mode.f2") }), h("span", { text: t("mode.f3") }))),
+      h("div", { class: "choices" },
+        h("div", { class: "choice primary" },
+          h("div", { class: "cic", text: "👥" }),
+          h("div", { class: "cbody" }, h("h3", { text: t("group.title") }),
+            h("div", { class: "muted", style: "margin-top:4px", text: t("group.desc", { n: MAX_PLAYERS - 1 }) }),
+            h("button", { class: "btn", text: t("group.btn"), onclick: () => startProfile("group") }))),
+        h("div", { class: "choice" },
+          h("div", { class: "cic", text: "🧍" }),
+          h("div", { class: "cbody" }, h("h3", { text: t("solo.title") }),
+            h("div", { class: "muted", style: "margin-top:4px", text: t("solo.desc") }),
+            h("button", { class: "btn ghost", text: t("solo.btn"), onclick: () => startProfile("solo") }))),
+        h("div", { class: "choice" },
+          h("div", { class: "cic", text: "🔑" }),
+          h("div", { class: "cbody" }, h("h3", { text: t("code.title") }),
+            h("div", { class: "muted", style: "margin:4px 0 10px", text: t("code.desc") }),
+            code,
+            h("button", { class: "btn ghost", text: t("code.btn"), onclick: () => joinWithCode(code.value) })))));
     return;
   }
 
@@ -835,12 +891,13 @@ function saveQr(link, name) {
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   }, "image/png");
 }
-function qrCard(icon, title, desc, link, shareMsg, fileName, extra) {
+function qrCard(icon, title, desc, link, shareMsg, fileName, extra, top) {
   const qr = h("div", { class: "qrbox" });
   qr.innerHTML = qrSvg(link, "M", 240); // markup generated locally from numbers only
   return h("div", { class: "card" },
     cardTitle(icon, title, t("hostonly").replace("🔒 ", "👑 ")),
     h("div", { class: "muted small", style: "margin:-6px 0 8px", text: desc }),
+    top,
     h("div", { class: "qrwrap" }, qr,
       h("div", { class: "linktxt", text: link }),
       h("div", { class: "btnrow" },
@@ -868,7 +925,16 @@ function renderParty() {
       else { S.confirm[k] = false; rotateInvite(); }
     } });
     rot.style.width = "100%";
-    box.append(qrCard("📨", t("invite.title"), t("invite.desc"), inviteLink(), t("invite.msg"), "study-duel-invite.png", rot));
+    if (!S.info.joinCode && !S.jcTried) { S.jcTried = true; ensureJoinCode(); }
+    const jc = S.info.joinCode;
+    const codeRow = jc
+      ? h("div", { class: "coderow" },
+          h("div", {}, h("div", { class: "muted small", style: "font-weight:700", text: t("invite.code") }), h("div", { class: "codebig", text: fmtCode(jc) })),
+          h("button", { class: "btn small", text: t("invite.copycode"), onclick: () => copyText(fmtCode(jc), "invite.code.copied") }))
+      : h("div", { class: "coderow" },
+          h("div", { class: "muted small", style: "flex:1", text: t("code.unavailable") }),
+          h("button", { class: "btn small", text: t("code.create"), onclick: async () => { const ok = await ensureJoinCode(); if (!ok) toast(t("code.unavailable")); } }));
+    box.append(qrCard("📨", t("invite.title"), t("invite.desc"), inviteLink(), t("invite.msg"), "study-duel-invite.png", rot, codeRow));
   }
   if (host) {
     const hasApk = !!(apkUrl && apkUrl.trim());
@@ -1022,11 +1088,21 @@ let unsubs = [];
 function resetData() {
   S.players = {}; S.logs = []; S.settings = null; S.result = null; S.info = null; S.chat = []; S.chatTo = null;
   S.loaded = { players: false, logs: false, settings: false, result: false, info: false, chat: false };
-  S.animatedTs = null; S.lastPts = {}; S.lastLvl = {}; S.mainShown = false; S.kicked = false;
+  S.animatedTs = null; S.lastPts = {}; S.lastLvl = {}; S.mainShown = false; S.kicked = false; S.jcTried = false;
 }
 function stopListening() { unsubs.forEach(u => { try { u(); } catch (e) {} }); unsubs = []; }
 async function tryDo(fn) { try { await fn(); return true; } catch (e) { return false; } }
 
+async function joinWithCode(raw) {
+  const c = cleanCode(raw);
+  if (c.length !== 8) { toast(t("code.bad")); return; }
+  let snap;
+  try { snap = await S.db.doc("joinCodes/" + c).get(); } catch (e) { toast(t("err.offline")); return; }
+  if (!snap.exists) { toast(t("code.bad")); return; }
+  const d = snap.data();
+  S.pending = { type: "join", code: d.party, key: d.key };
+  renderAll();
+}
 function startProfile(type) { S.pending = { type }; renderAll(); }
 async function submitProfile(nick, avatar) {
   LS.set("nick", nick);
@@ -1043,10 +1119,21 @@ async function submitProfile(nick, avatar) {
   const mode = pd.type === "solo" ? "solo" : "group";
   for (let i = 0; i < 5; i++) {
     const code = genCode(), key = genKey();
-    const created = await tryDo(() => S.db.doc("parties/" + code).set({ created: Date.now(), owner: uid, mode, key }));
+    const createdTs = Date.now();
+    const created = await tryDo(() => S.db.doc("parties/" + code).set({ created: createdTs, owner: uid, mode, key }));
     if (!created) continue;
     const joined = await tryDo(() => S.db.doc(`parties/${code}/players/${uid}`).set({ nick, avatar, joinedAt: Date.now(), key }));
     if (!joined) { toast(t("err.generic")); return; }
+    if (mode === "group") {
+      // publish the short party code (best effort — the QR/link work even if this fails)
+      for (let j = 0; j < 4; j++) {
+        const jc = genJoinCode();
+        if (await tryDo(() => S.db.doc("joinCodes/" + jc).set({ party: code, key, owner: uid }))) {
+          await tryDo(() => S.db.doc("parties/" + code).set({ created: createdTs, owner: uid, mode, key, joinCode: jc }));
+          break;
+        }
+      }
+    }
     return enterParty(code);
   }
   toast(t("err.offline"));
@@ -1145,6 +1232,7 @@ function readInvite() {
   return m ? { type: "join", code: m[1].toUpperCase(), key: m[2] } : { type: "bad" };
 }
 async function boot() {
+  applyTheme();
   buildStatic();
   const invite = readInvite();
   renderAll();

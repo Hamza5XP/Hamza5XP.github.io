@@ -1,6 +1,6 @@
 // Study Duel service worker: makes the app load instantly and work offline.
 // Bump VERSION whenever you change any app file so phones pick up the update.
-const VERSION = "studyduel-v2";
+const VERSION = "studyduel-v3";
 const SHELL = [
   "./", "./index.html", "./app.js", "./i18n.js", "./qr.js", "./firebase-config.js",
   "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-512.png"
