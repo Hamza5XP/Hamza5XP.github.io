@@ -1,6 +1,6 @@
 // Study Duel service worker: makes the app load instantly and work offline.
 // Bump VERSION whenever you change any app file so phones pick up the update.
-const VERSION = "studyduel-v3";
+const VERSION = "studyduel-v4";
 const SHELL = [
   "./", "./index.html", "./app.js", "./i18n.js", "./qr.js", "./firebase-config.js",
   "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-512.png"
@@ -41,4 +41,13 @@ self.addEventListener("fetch", e => {
       return hit || net;
     })
   );
+});
+
+// Tapping a notification brings the app to the front (or opens it).
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
+    for (const c of list) { if ("focus" in c) return c.focus(); }
+    return self.clients.openWindow("./");
+  }));
 });

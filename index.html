@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Study Duel</title>
-<meta name="theme-color" content="#7c5cff">
+<meta name="theme-color" content="#37707f">
 <meta name="description" content="Challenge your friends to study more: log sessions, earn points, win prizes.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
@@ -323,6 +323,108 @@ input[type=number],input[type=date]{text-align:start}
 .banner .x{margin-inline-start:auto}
 .banner a.btn,.banner button.btn{width:auto;margin:0;padding:8px 14px;font-size:13px;text-decoration:none;display:inline-block;border-radius:12px}
 
+
+/* ================= v4 · calm theme ================= */
+:root{--bg:#f6f5f0;--card:#fffffd;--text:#23272c;--muted:#6b7178;--line:#e8e5dc;--a:#3b7686;--abtn:#37707f;--b:#d48a57;--ok:#3d9971;--warn:#cb5b5b;--gold:#c79f3a;
+  --shadow:0 1px 2px rgba(35,39,44,.05),0 6px 18px rgba(35,39,44,.05);--shadow-lg:0 2px 4px rgba(35,39,44,.06),0 12px 28px rgba(35,39,44,.09);--blob1:transparent;--blob2:transparent}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14171a;--card:#1c2024;--text:#e8eaec;--muted:#98a0a8;--line:#2b3138;--a:#7db3c5;--abtn:#3f7f93;--b:#e0a070;--ok:#4cc08f;--warn:#e47a7a;--gold:#d9b54f;--shadow:none;--shadow-lg:0 10px 30px rgba(0,0,0,.35)}}
+:root[data-theme="dark"]{--bg:#14171a;--card:#1c2024;--text:#e8eaec;--muted:#98a0a8;--line:#2b3138;--a:#7db3c5;--abtn:#3f7f93;--b:#e0a070;--ok:#4cc08f;--warn:#e47a7a;--gold:#d9b54f;--shadow:none;--shadow-lg:0 10px 30px rgba(0,0,0,.35)}
+.bg{display:none}
+.logo .sw,.av,.big.float,.orbit span,.step i,.flame,.pl.lead::after,.landing .orb{animation:none}
+.logo span.t,.ltitle,.codebig{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:var(--text);-webkit-text-fill-color:currentColor}
+.codebig{color:var(--a)}
+.card{border-radius:20px;padding:18px 18px 16px}
+.hero,.result{background:var(--card)}
+.landing{background:color-mix(in srgb,var(--a) 8%,var(--card));box-shadow:var(--shadow)}
+.btn{background:var(--abtn);box-shadow:none;border-radius:14px}
+.btn::after{display:none}
+.btn:hover{filter:none;opacity:.92}
+.navind{background:var(--abtn);box-shadow:none}
+.ct .ci{background:color-mix(in srgb,var(--a) 14%,var(--card))}
+.choice .cic{background:color-mix(in srgb,var(--a) 14%,var(--card))}
+.choice.primary{background:var(--abtn);box-shadow:var(--shadow-lg)}
+.choice.primary .btn{background:#fff;color:#2c5a67;box-shadow:none}
+.step b{background:var(--abtn)}
+.msg.me{background:color-mix(in srgb,var(--a) 15%,var(--card));border-color:color-mix(in srgb,var(--a) 30%,var(--line))}
+.to button.on{background:var(--abtn)}
+.pl{border-width:1.5px}
+.pl.lead{box-shadow:none;border-width:2px}
+.badgeN{background:var(--warn)}
+.intro .pane>*,#gate.fresh>*{animation-duration:.35s}
+.quick button{background:var(--card)}
+.avpick button.on{transform:none}
+
+/* moon (focus) badge */
+.av,.mav{position:relative}
+.moon{position:absolute;top:-6px;inset-inline-end:-10px;font-size:17px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.25))}
+.mav .moon{top:-8px;inset-inline-end:-8px;font-size:14px}
+
+/* missions */
+.mprog{height:6px;border-radius:9px;background:var(--line);overflow:hidden;margin:-4px 0 6px}
+.mprog i{display:block;height:100%;width:0;background:var(--ok);border-radius:9px;transition:width .5s}
+.mission{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
+.mission .m{flex:1;min-width:0}
+.mission .t{font-weight:700;overflow-wrap:anywhere}
+.mission .s{font-size:12.5px;color:var(--muted);font-weight:600}
+.mission.done .mt{text-decoration:line-through;color:var(--muted)}
+.mcheck{width:30px;height:30px;border-radius:10px;border:2px solid color-mix(in srgb,var(--muted) 55%,var(--line));background:var(--bg);flex:none;display:grid;place-items:center;cursor:pointer;color:transparent;font:inherit;font-size:18px;font-weight:900;padding:0;transition:background .2s,border-color .2s,transform .15s}
+.mcheck:active{transform:scale(.88)}
+.mcheck.on{background:var(--ok);border-color:var(--ok);color:#fff}
+.mform{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
+.mform .row select{flex:1 1 0}
+
+/* chat: conversation list + thread */
+.conv{display:flex;gap:12px;align-items:center;padding:10px 8px;margin:0 -8px;border-radius:16px;cursor:pointer;transition:background .15s}
+.conv:hover,.conv:active{background:var(--bg)}
+.conv .cm{flex:1;min-width:0}
+.conv .cn{font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conv .cp{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv .cr{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none}
+.conv .ct2{font-size:11px;color:var(--muted);font-weight:700}
+.unread{background:var(--abtn);color:#fff;border-radius:99px;font-size:11px;font-weight:800;padding:1px 7px;min-width:20px;text-align:center}
+.thead{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.thead .x{font-size:20px;flex:none}
+.tinfo{display:flex;align-items:center;gap:10px;min-width:0}
+.tinfo .cn{font-weight:800}
+.msg.deleted{font-style:italic;color:var(--muted);background:transparent;border-style:dashed}
+html[dir="rtl"] .thead .x{transform:scaleX(-1)}
+
+/* focus overlay */
+body.focusing{overflow:hidden}
+#focusOverlay{position:fixed;inset:0;z-index:100;background:#0d1114;color:#e8eaec;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:28px;text-align:center;transition:background .3s}
+#focusOverlay.hit{background:#1c1214}
+#focusOverlay .fmoon{font-size:56px}
+#focusOverlay .fttl{font-weight:800;font-size:18px;opacity:.9}
+#focusOverlay .fclock{font-size:64px;font-weight:900;font-variant-numeric:tabular-nums;letter-spacing:.02em;direction:ltr}
+#focusOverlay .fbar{width:min(300px,80vw);height:8px;border-radius:9px;background:#2a3238;overflow:hidden}
+#focusOverlay .fbar i{display:block;height:100%;background:#7db3c5;border-radius:9px;transition:width 1s linear}
+#focusOverlay .fsub,#focusOverlay .ftip{color:#98a0a8;font-weight:600;font-size:14px;max-width:320px}
+#focusOverlay .floss{font-weight:800;min-height:24px}
+#focusOverlay .floss.bad{color:#ff8f8f}
+#focusOverlay .floss.good{color:#6fd3a5}
+#focusOverlay .btn.ghost{background:transparent;color:#cfd4d9;border-color:#3a434b;width:auto;padding:11px 22px;margin-top:10px}
+
+/* settings & help */
+.setrow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}
+.setrow:last-child{border-bottom:0}
+.setrow .sl{font-weight:700}
+.setrow .ss{font-size:12.5px;color:var(--muted);font-weight:600;margin-top:2px}
+.seg{display:inline-flex;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:3px;gap:2px;flex:none}
+.seg button{border:0;background:transparent;color:var(--muted);font:inherit;font-weight:700;font-size:13px;padding:6px 11px;border-radius:9px;cursor:pointer}
+.seg button.on{background:var(--abtn);color:#fff}
+.switch{width:46px;height:26px;border-radius:99px;border:0;background:var(--line);position:relative;cursor:pointer;flex:none;transition:background .2s;padding:0}
+.switch::after{content:"";position:absolute;top:3px;inset-inline-start:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:inset-inline-start .2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.switch.on{background:var(--ok)}
+.switch.on::after{inset-inline-start:23px}
+details.help{border-bottom:1px solid var(--line);padding:12px 0}
+details.help:last-child{border-bottom:0}
+details.help summary{font-weight:800;cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center}
+details.help summary::-webkit-details-marker{display:none}
+details.help summary::after{content:"＋";color:var(--muted)}
+details.help[open] summary::after{content:"－"}
+details.help .hb{margin-top:8px;color:var(--muted);white-space:pre-line;line-height:1.75;font-size:14.5px}
+.setrow input[type=time]{width:auto}
+.btn.small{white-space:nowrap}
 </style>
 </head>
 <body>
@@ -334,6 +436,7 @@ input[type=number],input[type=date]{text-align:start}
   </header>
 
   <div id="install"></div>
+  <div id="notifBanner"></div>
   <div id="gate"></div>
 
   <main id="main" hidden>
@@ -341,41 +444,34 @@ input[type=number],input[type=date]{text-align:start}
     <section id="tab-home" class="pane">
       <div class="card hero" id="vsCard"></div>
       <div id="resultBox"></div>
-      <div class="card" id="logCard">
-        <div class="ct"><span class="ci">📝</span><span data-i18n="log.title">Log a study session</span></div>
-        <div id="formWrap">
-          <label for="subject" style="margin-top:0" data-i18n="log.subject">Subject / task</label>
-          <input id="subject" list="subjects" data-i18n-ph="log.subject.ph" maxlength="60" autocomplete="off">
+      <div class="card" id="missionCard">
+        <div class="ct"><span class="ci">🎯</span><span data-i18n="mis.title">Today's missions</span><span class="r" id="misCount"></span></div>
+        <div class="mprog"><i id="misBar"></i></div>
+        <div id="misList"></div>
+        <div class="mform">
+          <input id="mSubject" list="subjects" data-i18n-ph="mis.ph" maxlength="60" autocomplete="off" aria-label="Subject">
           <datalist id="subjects"></datalist>
-          <div class="row">
-            <div>
-              <label for="minutes" data-i18n="log.minutes">Minutes studied</label>
-              <input id="minutes" type="number" inputmode="numeric" min="5" max="600" step="5" placeholder="45">
-            </div>
-            <div>
-              <label for="diff" data-i18n="log.diff">Difficulty</label>
-              <select id="diff">
-                <option value="1" data-i18n="log.diff.1">Easy ×1</option>
-                <option value="1.5" selected data-i18n="log.diff.15">Medium ×1.5</option>
-                <option value="2" data-i18n="log.diff.2">Hard ×2</option>
-              </select>
-            </div>
+          <div class="row" style="margin-top:8px;align-items:center">
+            <select id="mMin" aria-label="Minutes"></select>
+            <select id="mDiff" aria-label="Difficulty">
+              <option value="1" data-i18n="log.diff.1">Easy ×1</option>
+              <option value="1.5" selected data-i18n="log.diff.15">Medium ×1.5</option>
+              <option value="2" data-i18n="log.diff.2">Hard ×2</option>
+            </select>
+            <button class="btn small" id="mAdd" style="flex:none" data-i18n="mis.add">Add</button>
           </div>
-          <div class="quick" id="quick"></div>
-          <label class="check"><input type="checkbox" id="done"> <span data-i18n="log.done">✅ I finished the task / chapter (+10)</span></label>
-          <div class="row">
-            <div>
-              <label for="day" data-i18n="log.day">Day</label>
-              <input id="day" type="date">
-            </div>
-            <div>
-              <label for="note" data-i18n="log.note">Note (optional)</label>
-              <input id="note" maxlength="80" data-i18n-ph="log.note.ph">
-            </div>
-          </div>
-          <div class="preview" id="preview"></div>
-          <button class="btn" id="logBtn" data-i18n="log.btn">Log it &amp; earn points</button>
+          <div class="muted small" style="margin-top:8px" data-i18n="mis.hint"></div>
+          <div class="muted small" id="misHint" style="color:var(--warn)"></div>
         </div>
+      </div>
+      <div class="card" id="focusCard">
+        <div class="ct"><span class="ci">🌙</span><span data-i18n="focus.title">Focus mode</span></div>
+        <div class="muted small" data-i18n="focus.desc"></div>
+        <div class="muted small" id="focusOthers" style="margin-top:6px;font-weight:700"></div>
+        <div class="quick" id="focusQuick"></div>
+        <label for="focusMin" data-i18n="focus.custom">Minutes</label>
+        <input id="focusMin" type="number" inputmode="numeric" min="5" max="240" step="5" value="25">
+        <button class="btn" id="focusGo" data-i18n="focus.start">Start focus</button>
       </div>
       <div class="card" id="todayBox"></div>
     </section>
@@ -385,22 +481,31 @@ input[type=number],input[type=date]{text-align:start}
 
     <!-- CHAT -->
     <section id="tab-chat" class="pane" hidden>
-      <div class="card">
-        <div class="ct"><span class="ci">💬</span><span data-i18n="chat.title">Party chat</span></div>
-        <div class="muted small" style="margin:-4px 0 12px" data-i18n="chat.desc"></div>
-        <div class="to" id="chatTo"></div>
-        <div class="chatbox" id="chatList"></div>
-        <div class="quick" id="chatQuick"></div>
-        <div class="row" style="margin-top:12px;align-items:center">
-          <input id="chatIn" maxlength="200" data-i18n-ph="chat.ph" autocomplete="off">
-          <button class="btn small" id="chatSend" style="flex:none" data-i18n="chat.send">Send</button>
+      <div id="chatListView">
+        <div class="card">
+          <div class="ct"><span class="ci">💬</span><span data-i18n="chat.convs">Chats</span></div>
+          <div id="convList"></div>
+          <div class="muted small" style="margin-top:12px" data-i18n="chat.desc"></div>
         </div>
-        <div class="emo" id="chatEmo"></div>
+      </div>
+      <div id="chatThreadView" hidden>
+        <div class="card">
+          <div class="thead"><button class="x" id="chatBack" aria-label="Back">←</button><div class="tinfo" id="tInfo"></div></div>
+          <div class="chatbox" id="chatList"></div>
+          <div class="quick" id="chatQuick"></div>
+          <div class="row" style="margin-top:12px;align-items:center">
+            <input id="chatIn" maxlength="200" data-i18n-ph="chat.ph" autocomplete="off">
+            <button class="btn small" id="chatSend" style="flex:none" data-i18n="chat.send">Send</button>
+          </div>
+          <div class="emo" id="chatEmo"></div>
+        </div>
       </div>
     </section>
 
     <!-- PARTY -->
     <section id="tab-party" class="pane" hidden></section>
+    <!-- SETTINGS & HELP -->
+    <section id="tab-more" class="pane" hidden></section>
   </main>
 </div>
 
@@ -414,6 +519,7 @@ input[type=number],input[type=date]{text-align:start}
   </div>
 </nav>
 
+<div id="focusOverlay" hidden role="dialog" aria-modal="true"></div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

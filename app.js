@@ -5,7 +5,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  doc as fsDoc, collection as fsCollection, getDoc, setDoc, addDoc, deleteDoc,
+  doc as fsDoc, collection as fsCollection, getDoc, setDoc, addDoc, deleteDoc, updateDoc,
   onSnapshot as fsOnSnapshot, query, limit as fsLimit, orderBy as fsOrderBy
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -71,14 +71,16 @@ const joinNames = names => names.length <= 1 ? (names[0] || "") : names.slice(0,
 const cardTitle = (icon, text, right) => h("div", { class: "ct" }, h("span", { class: "ci", text: icon }), h("span", { text }), right ? h("span", { class: "r", text: right }) : null);
 
 const GOAL_BONUS = 10, DONE_BONUS = 10, MAX_PLAYERS = 8;
-const COLORS = ["#7c5cff", "#ff7a45", "#18a874", "#e5484d", "#f5b301", "#2f9bff", "#d65db1", "#6b7280"];
+const COLORS = ["#3b7686", "#d48a57", "#3d9971", "#cb5b5b", "#c79f3a", "#5f86c9", "#b0679a", "#7a8088"];
+const APP_VERSION = "4.0.0", APP_BUILD = "Oct 2026";
+const FOCUS_BONUS_PER = 10, PICKUP_LOSS = 1;
 const AVATARS = ["🦊", "🐼", "🐯", "🦄", "🐲", "🤖", "👾", "🧙"];
 const MEDALS = ["🥇", "🥈", "🥉"];
 
 /* ---------- state ---------- */
 const S = {
   db: null, myId: null, party: null, info: null, pending: null, kicked: false, authError: false,
-  players: {}, logs: [], settings: null, result: null, chat: [], chatTo: null, seenMem: 0,
+  players: {}, logs: [], settings: null, result: null, chat: [], thread: null, seen: {}, focus: null, focusSig: "", prevTab: "home", focusRestored: false,
   tab: "home", loaded: { players: false, logs: false, settings: false, result: false, info: false, chat: false },
   animatedTs: null, avatar: AVATARS[0], confirm: {}, lastPts: {}, lastLvl: {}, gateKey: null, mainShown: false,
   installEvt: null
@@ -152,6 +154,13 @@ async function safe(fn) {
     return undefined;
   }
 }
+function errToast(e) {
+  if (e && e.code === "permission-denied") toast(t("err.perm"));
+  else if (e && e.code === "resource-exhausted") toast(t("err.quota"));
+  else toast(t("err.generic"));
+}
+/* fire-and-forget write: the UI updates instantly from the local cache, errors still show a toast */
+const fire = fn => { Promise.resolve().then(fn).catch(errToast); };
 const hostOnly = () => { if (isHost()) return true; toast(t("only.host")); return false; };
 
 /* ---------- Firestore wrapper (small, promise-based) ---------- */
@@ -162,6 +171,7 @@ function makeDB(f) {
       const ref = fsDoc(f, path);
       return {
         set: d => setDoc(ref, d),
+        update: d => updateDoc(ref, d),
         get: async () => snapDoc(await getDoc(ref)),
         delete: () => deleteDoc(ref),
         onSnapshot: (next, err) => fsOnSnapshot(ref, s => next(snapDoc(s)), err)
@@ -194,9 +204,12 @@ const isHost = () => !!S.myId && hostId() === S.myId;
 const colorOf = uid => { const i = contestants().findIndex(c => c.id === uid); return COLORS[(i < 0 ? 0 : i) % COLORS.length]; };
 const logPoints = (minutes, mult, done) => Math.round(minutes / 5 * mult) + (done ? DONE_BONUS : 0);
 const levelOf = total => Math.floor(total / 50) + 1;
+const isStudy = l => !l.kind || (l.kind === "mission" && l.done);
 function stats(uid) {
   const st = S.settings;
-  const ls = S.logs.filter(l => l.uid === uid && l.day >= st.start && l.day <= st.end);
+  const all = S.logs.filter(l => l.uid === uid && l.day >= st.start && l.day <= st.end);
+  const ls = all.filter(isStudy);
+  const focusPts = all.filter(l => l.kind === "focus").reduce((a, l) => a + (l.points || 0), 0);
   const byDay = {};
   ls.forEach(l => byDay[l.day] = (byDay[l.day] || 0) + l.minutes);
   const days = Object.keys(byDay).sort();
@@ -214,14 +227,14 @@ function stats(uid) {
   const subjects = {};
   ls.forEach(l => { const k = (l.subject || "?").trim(); subjects[k] = (subjects[k] || 0) + l.minutes; });
   return {
-    ls, byDay, days, base, goalB, streakB, total: base + goalB + streakB, cur, best, subjects,
+    ls, byDay, days, base, goalB, streakB, focusPts, total: Math.max(0, base + focusPts + goalB + streakB), cur, best, subjects,
     minutes: ls.reduce((a, l) => a + l.minutes, 0),
     maxSession: ls.reduce((a, l) => Math.max(a, l.minutes), 0)
   };
 }
 function badgesFor(uid, st) {
   const out = [];
-  const all = S.logs.filter(l => l.day >= S.settings.start && l.day <= S.settings.end);
+  const all = S.logs.filter(l => isStudy(l) && l.day >= S.settings.start && l.day <= S.settings.end);
   if (!isSolo() && all.length) {
     const first = all.reduce((a, l) => (l.ts < a.ts ? l : a), all[0]);
     if (first.uid === uid) out.push(t("badge.first"));
@@ -358,15 +371,20 @@ if (window.matchMedia) {
 function renderChips() {
   const c = $("#chips");
   c.replaceChildren();
-  c.append(h("div", { class: "chip link", onclick: toggleLang }, h("b", { text: "🌐 " + t("lang.switch") })));
-  c.append(h("div", { class: "chip link", title: t("theme.toggle"), onclick: toggleTheme }, h("b", { text: effectiveTheme() === "dark" ? "☀️" : "🌙" })));
+  const inMain = gateScreen() === "main";
+  if (!inMain) {
+    c.append(h("div", { class: "chip link", onclick: toggleLang }, h("b", { text: "🌐 " + t("lang.switch") })));
+    c.append(h("div", { class: "chip link", title: t("theme.toggle"), onclick: toggleTheme }, h("b", { text: effectiveTheme() === "dark" ? "☀️" : "🌙" })));
+  }
   if (S.party && S.info) {
     if (isSolo()) c.append(h("div", { class: "chip" }, h("b", { text: t("chip.solo") })));
     else c.append(h("div", { class: "chip" }, "👥 ", h("b", { text: `${Object.keys(S.players).length}/${MAX_PLAYERS}` })));
   }
-  if (!S.settings) return;
-  if (isEnded()) c.append(h("div", { class: "chip" }, h("b", { text: t("chip.timeup") })));
-  else c.append(h("div", { class: "chip" }, h("b", { text: t("chip.left", { d: daysTxt(daysLeft()) }) })));
+  if (S.settings) {
+    if (isEnded()) c.append(h("div", { class: "chip" }, h("b", { text: t("chip.timeup") })));
+    else c.append(h("div", { class: "chip" }, h("b", { text: t("chip.left", { d: daysTxt(daysLeft()) }) })));
+  }
+  if (inMain) c.append(h("div", { class: "chip link", title: t("more.title"), onclick: openMore }, h("b", { text: "⚙️" })));
 }
 
 /* ---------- install banner ---------- */
@@ -515,9 +533,12 @@ function checkLevelUp(cs, st) {
     }
   });
 }
+const focusOn = id => { const p = S.players[id]; return !!(p && p.focus && p.focus.until > Date.now()); };
+const moonEl = id => focusOn(id) ? h("span", { class: "moon", text: "🌙", title: t("focus.on") }) : null;
+const moonTxt = id => focusOn(id) ? " 🌙" : "";
 function playerCard(c, s, color, lead) {
   return h("div", { class: `pl${lead ? " lead" : ""}`, style: `--pc:${color}` },
-    h("div", { class: "av", text: c.avatar }),
+    h("div", { class: "av" }, c.avatar, moonEl(c.id)),
     h("div", { class: "nm", text: c.nick + (c.id === S.myId ? " " + t("arena.you") : "") }),
     numEl(c.id, s.total, "pts"),
     h("div", { class: "lvl" }, h("span", { class: "flame", text: "🔥" }), " ", t("arena.level", { n: levelOf(s.total), s: s.cur })),
@@ -558,7 +579,7 @@ function renderVS() {
         h("div", { class: "rk", text: MEDALS[k] || `#${k + 1}` }),
         h("div", { class: "lbm" },
           h("div", { class: "row", style: "justify-content:space-between;align-items:center" },
-            h("span", { style: "font-weight:800", text: `${r.c.avatar} ${r.c.nick}${r.c.id === S.myId ? " " + t("arena.you") : ""}` }), mini),
+            h("span", { style: "font-weight:800", text: `${r.c.avatar}${moonTxt(r.c.id)} ${r.c.nick}${r.c.id === S.myId ? " " + t("arena.you") : ""}` }), mini),
           h("div", { class: "bar" }, h("i", { style: `width:${(r.s.total / max) * 100}%;background:${COLORS[r.i % COLORS.length]}` })),
           h("div", { class: "s" }, h("span", { class: "flame", text: "🔥" }), " ", t("arena.level.short", { n: levelOf(r.s.total), s: r.s.cur, m: mins(r.s.minutes) })),
           h("div", { class: "badges" }, badgesFor(r.c.id, r.s).map(b => h("span", { class: "badge", text: b }))))));
@@ -702,7 +723,7 @@ function renderToday() {
   const tt = today();
   const cs = contestants();
   const goal = S.settings.goal;
-  const minsOf = uid => S.logs.filter(l => l.uid === uid && l.day === tt).reduce((a, l) => a + l.minutes, 0);
+  const minsOf = uid => S.logs.filter(l => l.uid === uid && l.day === tt && isStudy(l)).reduce((a, l) => a + l.minutes, 0);
   const mine = minsOf(S.myId);
   box.append(cardTitle("📅", t("today.title"), t("today.goal", { x: mins(goal) })));
   const list = h("div", { style: "flex:1;min-width:0" });
@@ -711,7 +732,7 @@ function renderToday() {
     const m = minsOf(c.id);
     list.append(h("div", { class: "sub" },
       h("div", { class: "row", style: "justify-content:space-between;font-weight:700" },
-        h("span", { text: `${c.avatar} ${c.nick}` }),
+        h("span", { text: `${c.avatar}${moonTxt(c.id)} ${c.nick}` }),
         h("span", { class: "muted", style: "text-align:end", text: `${mins(m)}${m >= goal ? " ✅" : ""}` })),
       h("div", { class: "bar" }, h("i", { style: `width:${Math.min(100, (m / goal) * 100)}%;background:${colorOf(c.id)}` }))));
   });
@@ -721,22 +742,319 @@ function renderToday() {
     ringEl((mine / goal) * 100, colorOf(S.myId), `${Math.min(999, Math.round((mine / goal) * 100))}%`, mins(mine)),
     list));
 }
-function updatePreview() {
-  const m = Math.max(0, +$("#minutes").value || 0);
-  const pts = logPoints(m, +$("#diff").value, $("#done").checked);
-  const [a, b] = t("log.preview", { n: "\u0001" }).split("\u0001");
-  $("#preview").replaceChildren(a, h("span", { class: "tick", text: String(pts) }), b);
-}
+/* ---------- missions: type what you'll study, tick it when it's done ---------- */
+const inRound = () => !!S.settings && today() >= S.settings.start && today() <= S.settings.end;
+const myMissions = () => S.logs.filter(l => l.uid === S.myId && l.kind === "mission");
 function refreshSubjects() {
-  const seen = [...new Set(S.logs.filter(l => l.uid === S.myId).map(l => l.subject).filter(Boolean))].slice(0, 30);
+  const seen = [...new Set(S.logs.filter(l => l.uid === S.myId && l.kind !== "focus").map(l => l.subject).filter(Boolean))].slice(0, 30);
   $("#subjects").replaceChildren(...seen.map(s => h("option", { value: s })));
 }
-function refreshForm() {
+function missionRow(m, carried) {
+  const pts = logPoints(m.minutes, m.mult, true);
+  const lvl = m.mult >= 2 ? t("mis.hard") : m.mult >= 1.5 ? t("mis.med") : t("mis.easy");
+  return h("div", { class: `mission${m.done ? " done" : ""}` },
+    h("button", { class: `mcheck${m.done ? " on" : ""}`, type: "button", "aria-label": t("mis.check"), text: "✓", onclick: ev => toggleMission(m, ev.currentTarget) }),
+    h("div", { class: "m" },
+      h("div", { class: "t mt", text: m.subject }),
+      h("div", { class: "s", text: `${mins(m.minutes)} · ${lvl} · +${m.done ? m.points : pts} ⭐` })),
+    carried ? h("button", { class: "btn small ghost", style: "flex:none", text: t("mis.move"), onclick: () => fire(() => S.db.doc(P("logs/" + m.id)).update({ day: today() })) }) : null,
+    h("button", { class: "x", type: "button", text: S.confirm["ms" + m.id] ? t("chat.delsure") : "✕", style: S.confirm["ms" + m.id] ? "font-size:13px;font-weight:800;color:var(--warn)" : "", onclick: () => removeMission(m) }));
+}
+function renderMissions() {
+  const list = $("#misList");
+  list.replaceChildren();
   if (!S.settings) return;
-  const dayEl = $("#day");
-  dayEl.min = S.settings.start;
-  dayEl.max = today() < S.settings.end ? today() : S.settings.end;
-  if (!dayEl.value) dayEl.value = dayEl.max;
+  const tt = today();
+  const mine = myMissions().sort((a, b) => a.ts - b.ts);
+  const todays = mine.filter(m => m.day === tt);
+  const old = mine.filter(m => !m.done && m.day < tt && m.day >= S.settings.start);
+  const done = todays.filter(m => m.done).length;
+  $("#misCount").textContent = todays.length ? t("mis.count", { a: done, b: todays.length }) : "";
+  $("#misBar").style.width = todays.length ? `${(done / todays.length) * 100}%` : "0%";
+  if (!todays.length) list.append(h("div", { class: "muted", style: "padding:4px 0 2px", text: t("mis.empty") }));
+  todays.forEach(m => list.append(missionRow(m, false)));
+  if (old.length) {
+    list.append(h("div", { class: "muted small", style: "margin:14px 0 2px;font-weight:800", text: t("mis.old") }));
+    old.forEach(m => list.append(missionRow(m, true)));
+  }
+  const closed = !inRound();
+  $("#mAdd").disabled = closed;
+  $("#misHint").textContent = closed ? t("mis.closed") : "";
+}
+function addMission() {
+  const inp = $("#mSubject"), subject = inp.value.trim();
+  if (!subject) { inp.classList.add("shake"); inp.focus(); setTimeout(() => inp.classList.remove("shake"), 400); return toast(t("mis.need")); }
+  if (!inRound()) return toast(t("mis.closed"));
+  const minutes = +$("#mMin").value || 30, mult = +$("#mDiff").value || 1.5;
+  fire(() => S.db.collection(P("logs")).add({ uid: S.myId, kind: "mission", day: today(), subject, minutes, mult, done: false, points: 0, ts: Date.now(), round: S.settings.round }));
+  inp.value = "";
+  inp.focus();
+}
+function toggleMission(m, el) {
+  const ref = () => S.db.doc(P("logs/" + m.id));
+  if (!m.done) {
+    if (!inRound()) return toast(t("mis.closed"));
+    const pts = logPoints(m.minutes, m.mult, true);
+    fire(() => ref().update({ done: true, points: pts, day: today(), doneTs: Date.now() }));
+    flyPoints(el, pts);
+    burst(el, ["⭐", "✨", "🔥", "📚", "💪"]);
+    toast(t("log.earned", { n: pts }));
+  } else {
+    fire(() => ref().update({ done: false, points: 0 }));
+  }
+}
+function removeMission(m) {
+  const k = "ms" + m.id;
+  if (m.done && !S.confirm[k]) {
+    S.confirm[k] = true; renderMissions();
+    setTimeout(() => { S.confirm[k] = false; if (S.party) renderMissions(); }, 3500);
+    return;
+  }
+  S.confirm[k] = false;
+  fire(() => S.db.doc(P("logs/" + m.id)).delete());
+}
+
+/* ---------- notifications (in-app + system) ---------- */
+const canNotify = () => "Notification" in window;
+const notifOK = () => canNotify() && Notification.permission === "granted" && LS.get("notif") !== "off";
+async function notify(title, body, tag) {
+  if (focusActive()) return;                       // Focus mode = do not disturb
+  if (document.hidden && notifOK()) {
+    const opts = { body, tag, icon: "icons/icon-192.png", badge: "icons/icon-192.png", renotify: true, lang: LANG, dir: LANG === "ar" ? "rtl" : "ltr" };
+    try { const reg = await navigator.serviceWorker.ready; await reg.showNotification(title, opts); return; } catch (e) { /* fall through */ }
+    try { new Notification(title, opts); return; } catch (e) { /* ignore */ }
+  }
+  if (!document.hidden) toast(body ? `${title} — ${body}` : title);
+}
+async function enableNotifications() {
+  if (!canNotify()) return toast(t("notif.unsupported"));
+  let p = Notification.permission;
+  if (p === "default") { try { p = await Notification.requestPermission(); } catch (e) {} }
+  if (p === "granted") { LS.set("notif", "on"); toast(t("notif.enabled")); }
+  else if (p === "denied") toast(t("notif.denied"));
+  LS.set("notifAsked", "1");
+  renderNotifBanner(); if (S.tab === "more") renderMore();
+}
+function renderNotifBanner() {
+  const box = $("#notifBanner");
+  box.replaceChildren();
+  if (gateScreen() !== "main" || !canNotify() || Notification.permission !== "default" || LS.get("notifAsked") === "1") return;
+  box.append(h("div", { class: "banner" }, h("span", { class: "grow", text: t("banner.notif") }),
+    h("button", { class: "btn", text: t("banner.notif.btn"), onclick: enableNotifications }),
+    h("button", { class: "x", text: "✕", onclick: () => { LS.set("notifAsked", "1"); renderNotifBanner(); } })));
+}
+
+/* ---------- daily study reminder (works while the app is open or sitting in the background) ---------- */
+const remindOn = () => LS.get("remind") !== "off";
+const remindTime = () => LS.get("remindTime") || "18:00";
+const studiedToday = () => S.logs.some(l => l.uid === S.myId && l.day === today() && isStudy(l));
+function checkReminder() {
+  if (!S.settings || !S.myId || !S.party || gateScreen() !== "main" || isEnded() || !remindOn() || focusActive()) return;
+  const key = "lastRemind." + S.party;
+  if (LS.get(key) === today()) return;
+  const [hh, mm] = remindTime().split(":").map(Number), n = new Date();
+  if (n.getHours() * 60 + n.getMinutes() < (hh || 0) * 60 + (mm || 0)) return;
+  LS.set(key, today());
+  if (studiedToday()) return;
+  const pend = myMissions().filter(m => m.day === today() && !m.done).length;
+  notify(t("rem.title"), pend ? t("rem.body.m", { n: pend }) : t("rem.body"), "remind");
+}
+
+/* ---------- focus mode (DND + timer + phone-use penalties) ---------- */
+const focusActive = () => !!(S.focus && S.focus.until > Date.now());
+const fmtTime = ts => new Date(ts).toLocaleTimeString(LOCALE(), { hour: "2-digit", minute: "2-digit" });
+const clockTxt = ms => { const s = Math.max(0, Math.ceil(ms / 1000)), hr = Math.floor(s / 3600), m = Math.floor(s / 60) % 60; return `${hr ? hr + ":" + pad(m) : pad(m)}:${pad(s % 60)}`; };
+const FOCUS_LEVELS = { relaxed: { spp: 60, mo: 0.16 }, normal: { spp: 30, mo: 0.11 }, strict: { spp: 15, mo: 0.07 } };
+const focusCfg = () => FOCUS_LEVELS[LS.get("strict")] || FOCUS_LEVELS.normal;
+const focusCap = mins => Math.max(3, Math.round(mins / 5));       // you can never lose more than a normal study session of the same length earns
+const lostOf = f => Math.min(focusCap(f.mins), Math.floor(f.act / (f.spp || 30)) + (f.picked || 0));
+let focusTimer = null, lastAcc = null, motionEma = 0, lastMove = 0, lastTouch = 0, endArmed = false;
+
+function setPresence(f) { if (S.party && S.players[S.myId]) fire(() => S.db.doc(P("players/" + S.myId)).update({ focus: f })); }
+const saveFocus = () => LS.set("focus", S.focus ? JSON.stringify({ ...S.focus, party: S.party }) : null);
+
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x == null) return;
+  if (lastAcc) {
+    const d = Math.hypot(a.x - lastAcc.x, a.y - lastAcc.y, a.z - lastAcc.z);
+    motionEma = motionEma * 0.9 + d * 0.1;
+    if (motionEma > (S.focus && S.focus.mo || 0.11)) lastMove = Date.now();
+  }
+  lastAcc = { x: a.x, y: a.y, z: a.z };
+}
+const onTouch = e => { if (e.target && e.target.closest && e.target.closest("[data-keep]")) return; lastTouch = Date.now(); };
+function attachSensors() {
+  lastAcc = null; motionEma = 0; lastMove = 0; lastTouch = 0;
+  window.addEventListener("devicemotion", onMotion);
+  ["touchstart", "pointerdown", "keydown"].forEach(ev => document.addEventListener(ev, onTouch, true));
+}
+function detachSensors() {
+  window.removeEventListener("devicemotion", onMotion);
+  ["touchstart", "pointerdown", "keydown"].forEach(ev => document.removeEventListener(ev, onTouch, true));
+}
+function onVis() {                              // picking the phone up and unlocking it mid-session costs a point
+  const f = S.focus;
+  if (!f) return;
+  if (document.hidden) f.hiddenAt = Date.now();
+  else if (f.hiddenAt) {
+    const away = Date.now() - f.hiddenAt; f.hiddenAt = null;
+    if (away > 4000 && Date.now() < f.until) f.picked = (f.picked || 0) + PICKUP_LOSS;
+    focusTick();
+  }
+}
+async function startFocus(mins) {
+  if (focusActive()) return;
+  mins = Math.min(240, Math.max(5, Math.round(mins) || 25));
+  try { if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === "function") await DeviceMotionEvent.requestPermission(); } catch (e) {}
+  const now = Date.now(), cfg = focusCfg();
+  S.focus = { start: now, until: now + mins * 60000, mins, act: 0, picked: 0, shown: 0, n: 0, spp: cfg.spp, mo: cfg.mo };
+  saveFocus();
+  setPresence({ until: S.focus.until, mins });
+  runFocus();
+  renderAll();
+}
+function runFocus() {
+  attachSensors();
+  showFocus();
+  clearInterval(focusTimer);
+  focusTimer = setInterval(focusTick, 1000);
+  focusTick();
+}
+function showFocus() {
+  const o = $("#focusOverlay");
+  o.hidden = false;
+  document.body.classList.add("focusing");
+  endArmed = false;
+  o.replaceChildren(
+    h("div", { class: "fmoon", text: "🌙" }),
+    h("div", { class: "fttl", text: t("focus.running") }),
+    h("div", { class: "fclock", id: "fClock" }),
+    h("div", { class: "fbar" }, h("i", { id: "fBar" })),
+    h("div", { class: "fsub", id: "fSub" }),
+    h("div", { class: "floss", id: "fLoss" }),
+    h("div", { class: "ftip", text: t("focus.tip") }),
+    h("button", { class: "btn ghost", type: "button", id: "fEnd", "data-keep": "1", text: t("focus.end"), onclick: endEarly }));
+  paintFocus();
+}
+function paintFocus() {
+  const f = S.focus;
+  if (!f || !$("#fClock")) return;
+  const now = Date.now(), lost = lostOf(f);
+  $("#fClock").textContent = clockTxt(f.until - now);
+  $("#fBar").style.width = `${Math.min(100, ((now - f.start) / (f.until - f.start)) * 100)}%`;
+  $("#fSub").textContent = t("focus.until", { time: fmtTime(f.until) });
+  const l = $("#fLoss");
+  l.textContent = lost > 0 ? t("focus.lost", { n: lost }) : t("focus.clean");
+  l.className = "floss " + (lost > 0 ? "bad" : "good");
+}
+function focusTick() {
+  const f = S.focus;
+  if (!f) { clearInterval(focusTimer); return; }
+  const now = Date.now();
+  if (now >= f.until) { finishFocus(true); return; }
+  if (!document.hidden && now > f.start + 6000 && (now - lastMove < 1500 || now - lastTouch < 3000)) f.act++;   // 6 s grace after pressing Start
+  const lost = lostOf(f);
+  if (lost > (f.shown || 0)) {
+    f.shown = lost;
+    const o = $("#focusOverlay"); o.classList.add("hit"); setTimeout(() => o.classList.remove("hit"), 700);
+    try { navigator.vibrate && navigator.vibrate(120); } catch (e) {}
+  }
+  if (++f.n % 5 === 0) saveFocus();
+  paintFocus();
+}
+function endEarly() {
+  const b = $("#fEnd");
+  if (!endArmed) {
+    endArmed = true; b.textContent = t("focus.end.sure");
+    setTimeout(() => { endArmed = false; const x = $("#fEnd"); if (x) x.textContent = t("focus.end"); }, 4000);
+    return;
+  }
+  finishFocus(false);
+}
+function finishFocus(completed) {
+  const f = S.focus;
+  if (!f) return;
+  clearInterval(focusTimer); detachSensors();
+  S.focus = null; saveFocus();
+  $("#focusOverlay").hidden = true; $("#focusOverlay").replaceChildren();
+  document.body.classList.remove("focusing");
+  const lost = lostOf(f);
+  const done = completed ? f.mins : Math.max(0, Math.floor((Date.now() - f.start) / 60000));
+  const bonus = completed && lost === 0 ? Math.max(1, Math.round(f.mins / FOCUS_BONUS_PER)) : 0;
+  const net = bonus - lost;
+  setPresence(null);
+  if (net !== 0 && inRound()) {
+    fire(() => S.db.collection(P("logs")).add({ uid: S.myId, kind: "focus", day: today(), subject: "focus", minutes: 0, mins: done, bonus, lost, points: net, done: false, ts: Date.now(), round: S.settings.round }));
+  }
+  if (completed) {
+    try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (e) {}
+    const msg = lost ? t("focus.done.lost", { n: lost }) : t("focus.done.clean", { b: bonus });
+    toast(msg);
+    notify(t("focus.done.title"), msg, "focus-done");
+    if (!lost) setTimeout(() => burst($("#focusCard"), ["🌙", "⭐", "✨"]), 200);
+  } else toast(lost ? t("focus.stopped", { n: lost }) : t("focus.stopped0"));
+  renderAll();
+}
+function maybeRestoreFocus() {                  // survive a page reload / the app being closed mid-session
+  if (S.focus || S.focusRestored || !S.settings) return;
+  S.focusRestored = true;
+  let d = null;
+  try { d = JSON.parse(LS.get("focus") || "null"); } catch (e) {}
+  if (!d || d.party !== S.party) return;
+  delete d.party;
+  S.focus = d;
+  if (Date.now() >= d.until) { finishFocus(true); return; }
+  setPresence({ until: d.until, mins: d.mins });
+  runFocus();
+}
+function renderFocusCard() {
+  const names = contestants().filter(c => c.id !== S.myId && focusOn(c.id)).map(c => c.nick);
+  $("#focusOthers").textContent = names.length ? t("focus.others", { names: joinNames(names) }) : "";
+}
+
+/* ---------- settings & help (kept out of the way) ---------- */
+function seg(options, current, onPick) {
+  return h("div", { class: "seg" }, ...options.map(([v, label]) => h("button", { type: "button", class: v === current ? "on" : "", text: label, onclick: () => onPick(v) })));
+}
+const setRow = (label, sub, control) => h("div", { class: "setrow" }, h("div", { style: "min-width:0" }, h("div", { class: "sl", text: label }), sub ? h("div", { class: "ss", text: sub }) : null), control);
+const helpItem = (title, body) => h("details", { class: "help" }, h("summary", { text: title }), h("div", { class: "hb", text: body }));
+function renderMore() {
+  const box = $("#tab-more");
+  const ae = document.activeElement;
+  if (box.contains(ae) && /^(INPUT|SELECT)$/.test(ae.tagName)) return;
+  box.replaceChildren();
+  const th = LS.get("theme") || "auto";
+  const perm = !canNotify() ? "unsupported" : Notification.permission;
+  const notifCtl = perm === "granted"
+    ? h("button", { class: `switch${LS.get("notif") !== "off" ? " on" : ""}`, type: "button", "aria-label": t("pref.notif"), onclick: () => { LS.set("notif", LS.get("notif") === "off" ? "on" : "off"); renderMore(); } })
+    : h("button", { class: "btn small", text: perm === "unsupported" ? t("notif.unsupported") : t("notif.enable"), onclick: enableNotifications });
+  if (perm === "unsupported") notifCtl.disabled = true;
+  const rt = h("input", { type: "time", value: remindTime() });
+  rt.addEventListener("change", () => { if (rt.value) { LS.set("remindTime", rt.value); LS.set("lastRemind." + S.party, null); toast(t("saved")); } });
+
+  box.append(
+    h("div", { style: "display:flex;gap:10px;align-items:center;margin-bottom:12px" },
+      h("button", { class: "btn small ghost", type: "button", text: t("back"), onclick: () => setTab(S.prevTab || "home") }),
+      h("h2", { style: "font-size:19px;font-weight:900", text: t("more.title") })),
+    h("div", { class: "card" }, cardTitle("🎛️", t("more.prefs")),
+      setRow(t("pref.lang"), null, seg([["en", "English"], ["ar", "العربية"]], LANG, v => { if (v !== LANG) toggleLang(); })),
+      setRow(t("pref.theme"), null, seg([["auto", t("theme.auto")], ["light", t("theme.light")], ["dark", t("theme.dark")]], th, v => { LS.set("theme", v === "auto" ? null : v); applyTheme(); renderMore(); })),
+      setRow(t("pref.notif"), perm === "denied" ? t("notif.denied") : t("pref.notif.sub"), notifCtl),
+      setRow(t("pref.remind"), t("pref.remind.sub"), h("button", { class: `switch${remindOn() ? " on" : ""}`, type: "button", "aria-label": t("pref.remind"), onclick: () => { LS.set("remind", remindOn() ? "off" : "on"); renderMore(); } })),
+      remindOn() ? setRow(t("pref.remind.time"), null, rt) : null,
+      setRow(t("pref.strict"), t("pref.strict.sub"), seg([["relaxed", t("strict.relaxed")], ["normal", t("strict.normal")], ["strict", t("strict.strict")]], LS.get("strict") || "normal", v => { LS.set("strict", v); renderMore(); }))),
+    h("div", { class: "card" }, cardTitle("📖", t("help.title")),
+      helpItem(t("help.points.t"), t("help.points.b") + "\n" + (isSolo() ? t("how.solo") : t("how.group"))),
+      helpItem(t("help.mis.t"), t("help.mis.b")),
+      helpItem(t("help.focus.t"), t("help.focus.b")),
+      helpItem(t("help.chat.t"), t("help.chat.b")),
+      helpItem(t("help.notif.t"), t("help.notif.b"))),
+    h("div", { class: "card" }, cardTitle("ℹ️", t("about.title")),
+      h("div", { class: "kv" }, h("span", { text: t("about.app") }), h("span", { text: t("app.title") })),
+      h("div", { class: "kv" }, h("span", { text: t("about.version") }), h("span", { text: `v${APP_VERSION}` })),
+      h("div", { class: "kv" }, h("span", { text: t("about.build") }), h("span", { text: APP_BUILD })),
+      h("div", { class: "muted small", style: "margin-top:10px", text: t("about.note") })));
 }
 
 /* ---------- stats (+ history) ---------- */
@@ -783,14 +1101,14 @@ function renderStats() {
       h("div", { class: "tiles" },
         tile(t("stats.total"), mins(s.minutes)), tile(t("stats.sessions"), s.ls.length),
         tile(t("stats.beststreak"), daysTxt(s.best)), tile(t("stats.longest"), s.maxSession ? mins(s.maxSession) : "–"),
-        tile(t("stats.sesspts"), s.base), tile(t("stats.bonuspts"), s.goalB + s.streakB)),
+        tile(t("stats.sesspts"), s.base), tile(t("stats.bonuspts"), s.goalB + s.streakB + s.focusPts)),
       h("div", { style: "font-weight:800;margin:16px 0 4px", text: t("stats.bysubject") }),
       subjectBars(s, COLORS[i % COLORS.length])));
   });
 
   const ids = cs.map(c => c.id);
   const ls = S.logs
-    .filter(l => ids.includes(l.uid) && l.day >= S.settings.start && l.day <= S.settings.end)
+    .filter(l => ids.includes(l.uid) && l.day >= S.settings.start && l.day <= S.settings.end && (isStudy(l) || l.kind === "focus"))
     .sort((a, b) => (a.day === b.day ? b.ts - a.ts : a.day < b.day ? 1 : -1));
   const hist = h("div", { class: "card" }, cardTitle("📜", t("stats.history"), t("stats.nsessions", { n: ls.length })));
   if (!ls.length) hist.append(h("div", { class: "muted", text: t("stats.nosessions") }));
@@ -799,9 +1117,11 @@ function renderStats() {
     hist.append(h("div", { class: "item" },
       h("span", { class: "dot", style: `background:${COLORS[idx % COLORS.length]}` }),
       h("div", { class: "m" },
-        h("div", { class: "t", text: `${l.subject || t("log.study")}${l.done ? " ✅" : ""}` }),
-        h("div", { class: "s", text: `${playerName(l.uid)} · ${niceDay(l.day)} · ${mins(l.minutes)}${l.note ? " · " + l.note : ""}` })),
-      h("div", { class: "p", text: `+${l.points}` }),
+        h("div", { class: "t", text: l.kind === "focus" ? t("hist.focus", { m: l.mins || 0 }) : `${l.subject || t("log.study")}${l.done ? " ✅" : ""}` }),
+        h("div", { class: "s", text: l.kind === "focus"
+          ? `${playerName(l.uid)} · ${niceDay(l.day)} · ${t("hist.focus.d", { b: l.bonus || 0, l: l.lost || 0 })}`
+          : `${playerName(l.uid)} · ${niceDay(l.day)} · ${mins(l.minutes)}${l.note ? " · " + l.note : ""}` })),
+      h("div", { class: "p", style: l.points < 0 ? "color:var(--warn)" : "", text: `${l.points > 0 ? "+" : ""}${l.points}` }),
       l.uid === S.myId ? h("button", { class: "x", text: "✕", onclick: async () => {
         const k = "del" + l.id;
         if (!S.confirm[k]) { S.confirm[k] = true; toast(t("stats.delconfirm")); setTimeout(() => { S.confirm[k] = false; }, 4000); return; }
@@ -812,59 +1132,118 @@ function renderStats() {
   box.append(hist);
 }
 
-/* ---------- chat ---------- */
+/* ---------- chat: a party chat + one private chat per person ---------- */
 const QUICK_KEYS = ["chat.q1", "chat.q2", "chat.q3", "chat.q4", "chat.q5"];
 const EMOJIS = ["😂", "🔥", "💪", "😴", "👏", "😈", "🎉"];
-const seenKey = () => "chatseen." + S.party;
-const getSeen = () => Math.max(S.seenMem, +LS.get(seenKey()) || 0);
-const setSeen = ts => { S.seenMem = Math.max(S.seenMem, ts); LS.set(seenKey(), String(S.seenMem)); };
-const visibleChat = () => S.chat.filter(m => !m.to || m.to === S.myId || m.uid === S.myId).sort((a, b) => a.ts - b.ts);
+const seenKey = th => `chatseen.${S.party}.${th}`;
+const getSeen = th => Math.max(S.seen[th] || 0, +LS.get(seenKey(th)) || 0);
+const setSeen = (th, ts) => { if (ts <= getSeen(th)) return; S.seen[th] = ts; LS.set(seenKey(th), String(ts)); };
+const involvesMe = m => !m.to || m.to === S.myId || m.uid === S.myId;
+const threadOf = m => (!m.to ? "group" : m.uid === S.myId ? m.to : m.uid);          // which conversation a message belongs to
+const threadMsgs = th => S.chat.filter(m => involvesMe(m) && threadOf(m) === th).sort((a, b) => a.ts - b.ts);
+const unreadIn = th => threadMsgs(th).filter(m => m.uid !== S.myId && !m.deleted && m.ts > getSeen(th)).length;
 function timeLabel(ts) {
   const d = new Date(ts);
   const tm = d.toLocaleTimeString(LOCALE(), { hour: "2-digit", minute: "2-digit" });
   return dstr(d) === today() ? tm : `${d.toLocaleDateString(LOCALE(), { month: "short", day: "numeric" })} ${tm}`;
 }
+function openThread(th) {
+  if (S.tab !== "chat") setTab("chat");
+  S.thread = th;
+  renderChat();
+  const l = $("#chatList"); l.scrollTop = l.scrollHeight;
+}
 function renderChat() {
   if (!S.settings) return;
-  const vis = visibleChat();
-  const latest = vis.length ? vis[vis.length - 1].ts : 0;
-  if (S.tab === "chat") setSeen(latest);
-  const unread = S.tab === "chat" ? 0 : vis.filter(m => m.uid !== S.myId && m.ts > getSeen()).length;
-  const badge = $("#chatBadge");
-  const was = badge.textContent;
+  const others = contestants().filter(c => c.id !== S.myId);
+  if (S.thread && S.thread !== "group" && !others.some(c => c.id === S.thread)) S.thread = null;
+  if (S.tab === "chat" && S.thread && !document.hidden) {          // reading it right now → mark as read
+    const l = threadMsgs(S.thread);
+    if (l.length) setSeen(S.thread, l[l.length - 1].ts);
+  }
+  const unread = ["group", ...others.map(c => c.id)].reduce((a, th) => a + unreadIn(th), 0);
+  const badge = $("#chatBadge"), was = badge.textContent;
   badge.hidden = !unread;
   badge.textContent = unread > 9 ? "9+" : String(unread);
   badge.style.animation = badge.textContent === was ? "none" : "";
-
-  const others = contestants().filter(c => c.id !== S.myId);
-  if (S.chatTo && !others.some(c => c.id === S.chatTo)) S.chatTo = null;
-  $("#chatTo").replaceChildren(
-    h("button", { class: S.chatTo ? "" : "on", text: t("chat.everyone"), onclick: () => { S.chatTo = null; renderChat(); } }),
-    ...others.map(c => h("button", { class: S.chatTo === c.id ? "on" : "", text: `🔒 ${c.avatar} ${c.nick}`, onclick: () => { S.chatTo = c.id; renderChat(); } })));
-
+  $("#chatListView").hidden = !!S.thread;
+  $("#chatThreadView").hidden = !S.thread;
+  if (S.thread) renderThread(); else renderConvs(others);
+}
+function renderConvs(others) {
+  const box = $("#convList");
+  box.replaceChildren();
+  const last = th => { const l = threadMsgs(th); return l[l.length - 1]; };
+  const row = (th, av, name, sub, m) => {
+    const un = unreadIn(th);
+    return h("div", { class: "conv", onclick: () => openThread(th) },
+      h("div", { class: "mav", style: `--c:${th === "group" ? COLORS[0] : colorOf(th)}` }, av, th === "group" ? null : moonEl(th)),
+      h("div", { class: "cm" }, h("div", { class: "cn", text: name }), h("div", { class: "cp", text: sub })),
+      h("div", { class: "cr" }, m ? h("div", { class: "ct2", text: timeLabel(m.ts) }) : null, un ? h("span", { class: "unread", text: un > 9 ? "9+" : String(un) }) : null));
+  };
+  const g = last("group");
+  const gsub = g ? `${g.uid === S.myId ? t("chat.you") : playerName(g.uid)}: ${g.deleted ? t("chat.deleted") : g.text}` : t("chat.empty.short");
+  box.append(row("group", "👥", t("chat.group"), gsub, g));
+  others
+    .map(c => ({ c, m: last(c.id) }))
+    .sort((a, b) => ((b.m && b.m.ts) || 0) - ((a.m && a.m.ts) || 0) || a.c.nick.localeCompare(b.c.nick))
+    .forEach(({ c, m }) => box.append(row(c.id, c.avatar, c.nick,
+      m ? `${m.uid === S.myId ? t("chat.you") + ": " : ""}${m.deleted ? t("chat.deleted") : m.text}` : (focusOn(c.id) ? "🌙 " + t("focus.busy") : t("chat.tap")), m)));
+  if (!others.length) box.append(h("div", { class: "muted center", style: "padding:14px 0 4px", text: t("chat.alone") }));
+}
+function renderThread() {
+  const th = S.thread, group = th === "group", c = group ? null : S.players[th];
+  $("#tInfo").replaceChildren(
+    h("div", { class: "mav", style: `--c:${group ? COLORS[0] : colorOf(th)}` }, group ? "👥" : (c ? c.avatar : "🙂"), group ? null : moonEl(th)),
+    h("div", { style: "min-width:0" },
+      h("div", { class: "cn", text: group ? t("chat.group") : playerName(th) }),
+      h("div", { class: "muted small", text: group ? t("chat.members", { n: Object.keys(S.players).length }) : focusOn(th) ? "🌙 " + t("focus.until", { time: fmtTime(c.focus.until) }) + " · " + t("focus.dm") : t("chat.private") })));
   const list = $("#chatList");
   const near = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
   const known = new Set([...list.querySelectorAll("[data-id]")].map(e => e.dataset.id));
+  const vis = threadMsgs(th);
   list.replaceChildren();
   if (!vis.length) list.append(h("div", { class: "muted", style: "text-align:center;margin:auto", text: t("chat.empty") }));
   vis.forEach(m => {
-    const mine = m.uid === S.myId;
-    const noAnim = (known.size && known.has(m.id)) || (known.size === 0 && S.tab !== "chat");
-    list.append(h("div", { "data-id": m.id, class: `msg${mine ? " me" : ""}${m.to ? " whisper" : ""}`, style: noAnim ? "animation:none" : "" },
-      mine ? null : h("div", { class: "who", style: `color:${colorOf(m.uid)}`, text: `${playerAv(m.uid)} ${playerName(m.uid)}` }),
-      h("div", { text: m.text }),
+    const mine = m.uid === S.myId, del = !!m.deleted, k = "m" + m.id;
+    const noAnim = known.size ? known.has(m.id) : true;
+    list.append(h("div", { "data-id": m.id, class: `msg${mine ? " me" : ""}${del ? " deleted" : ""}`, style: noAnim ? "animation:none" : "" },
+      !mine && group ? h("div", { class: "who", style: `color:${colorOf(m.uid)}`, text: `${playerAv(m.uid)} ${playerName(m.uid)}` }) : null,
+      h("div", { text: del ? "🚫 " + (mine ? t("chat.deleted.you") : t("chat.deleted")) : m.text }),
       h("div", { class: "meta" },
         h("span", { text: timeLabel(m.ts) }),
-        m.to ? h("span", { text: mine ? t("chat.to", { name: playerName(m.to) }) : t("chat.foryou") }) : null,
-        mine ? h("button", { class: "x", style: "font-size:12px;padding:0 4px", text: "✕", onclick: () => safe(() => S.db.doc(P("chat/" + m.id)).delete()) }) : null)));
+        mine && !del ? h("button", { class: "x", type: "button", style: "font-size:12px;padding:0 4px" + (S.confirm[k] ? ";color:var(--warn);font-weight:800" : ""), text: S.confirm[k] ? t("chat.delsure") : "✕", onclick: () => deleteMsg(m.id) }) : null)));
   });
-  if (near) list.scrollTop = list.scrollHeight;
+  if (near || !known.size) list.scrollTop = list.scrollHeight;
+}
+/* soft delete: the message stays as a "deleted" placeholder so the other person(s) get notified and see it was removed */
+function deleteMsg(id) {
+  const k = "m" + id;
+  if (!S.confirm[k]) {
+    S.confirm[k] = true; renderChat();
+    setTimeout(() => { S.confirm[k] = false; if (S.party) renderChat(); }, 3500);
+    return;
+  }
+  S.confirm[k] = false;
+  fire(() => S.db.doc(P("chat/" + id)).update({ deleted: true, text: "", delTs: Date.now() }));
 }
 async function sendChat(raw) {
   const text = (raw || "").trim().slice(0, 200);
-  if (!text || !S.players[S.myId]) return;
-  const res = await safe(() => S.db.collection(P("chat")).add({ uid: S.myId, to: S.chatTo || null, text, ts: Date.now() }));
+  if (!text || !S.players[S.myId] || !S.thread) return;
+  const to = S.thread === "group" ? null : S.thread;
+  const res = await safe(() => S.db.collection(P("chat")).add({ uid: S.myId, to, text, ts: Date.now() }));
   if (res !== undefined) setTimeout(() => { const l = $("#chatList"); l.scrollTop = l.scrollHeight; }, 60);
+}
+function onChatChange(type, m) {                      // called for every live change after the first load
+  if (!m || m.uid === S.myId || !involvesMe(m)) return;
+  const th = threadOf(m), name = playerName(m.uid);
+  const watching = S.tab === "chat" && S.thread === th && !document.hidden;
+  if (type === "added" && !m.deleted) {
+    if (!watching) notify(th === "group" ? `${name} · ${t("chat.group")}` : name, String(m.text).slice(0, 80), "msg-" + th);
+  } else if (type === "modified" && m.deleted && !S.notified.has(m.id)) {
+    S.notified.add(m.id);
+    notify(t("chat.delnotif.title"), t(th === "group" ? "chat.delnotif.group" : "chat.delnotif", { name }), "del-" + th);
+  }
 }
 
 /* ---------- sharing + QR ---------- */
@@ -948,10 +1327,11 @@ function renderParty() {
     const isH = c.id === hostId();
     const k = "rm" + c.id;
     mem.append(h("div", { class: "item" },
-      h("div", { class: "mav", style: `--c:${COLORS[i % COLORS.length]}`, text: c.avatar }),
+      h("div", { class: "mav", style: `--c:${COLORS[i % COLORS.length]}` }, c.avatar, moonEl(c.id)),
       h("div", { class: "m" },
         h("div", { class: "t" }, c.nick + (c.id === S.myId ? " " + t("arena.you") : ""), isH ? h("span", { class: "tag", text: t("party.host") }) : null),
-        h("div", { class: "s", text: t("party.lvlpts", { n: levelOf(s.total), p: s.total }) })),
+        h("div", { class: "s", text: t("party.lvlpts", { n: levelOf(s.total), p: s.total }) + (focusOn(c.id) ? " · 🌙 " + t("focus.until", { time: fmtTime(c.focus.until) }) : "") })),
+      !solo && c.id !== S.myId ? h("button", { class: "x", title: t("party.msg"), text: "💬", onclick: () => openThread(c.id) }) : null,
       host && !solo && c.id !== S.myId ? h("button", { class: "x", title: t("party.remove"), text: S.confirm[k] ? t("party.sure") : "✕", style: S.confirm[k] ? "font-size:13px;font-weight:800;color:var(--warn)" : "", onclick: () => {
         if (!S.confirm[k]) { S.confirm[k] = true; renderParty(); setTimeout(() => { S.confirm[k] = false; renderParty(); }, 3500); }
         else { S.confirm[k] = false; removeMember(c.id); }
@@ -1006,10 +1386,6 @@ function renderParty() {
       box.append(card);
     });
 
-  /* how it works */
-  box.append(h("div", { class: "card" }, cardTitle("📖", t("how.title")),
-    h("div", { class: "muted", style: "line-height:1.8" }, t("how.1"), h("br"), t("how.2"), h("br"), t("how.3"), h("br"), t("how.4"), h("br"), solo ? t("how.solo") : t("how.group"))));
-
   /* leave */
   box.append(h("div", { class: "card" },
     solo ? h("div", { class: "muted small", style: "margin-bottom:10px", text: t("solo.note") }) : null,
@@ -1023,7 +1399,8 @@ function renderParty() {
 function moveInd() {
   const on = document.querySelector("#navbar button.on:not([hidden])");
   const ind = $("#navind");
-  if (!on || !on.offsetWidth) return;
+  if (!on || !on.offsetWidth) { ind.style.opacity = "0"; return; }
+  ind.style.opacity = "1";
   ind.style.width = on.offsetWidth + "px";
   ind.style.transform = `translateX(${on.offsetLeft}px)`;
 }
@@ -1045,23 +1422,31 @@ function renderAll() {
   renderVS();
   renderResult();
   renderToday();
-  refreshForm();
+  renderMissions();
   refreshSubjects();
+  renderFocusCard();
   renderStats();
   renderChat();
   renderParty();
+  if (S.tab === "more") renderMore();
+  renderNotifBanner();
   updateNav();
+  maybeRestoreFocus();
 }
 function setTab(tab) {
+  if (tab === "chat" && S.tab === "chat") S.thread = null;      // tapping Chat again goes back to the list
+  if (tab !== "chat") S.thread = null;
+  if (tab === "more" && S.tab !== "more") S.prevTab = S.tab;
   S.tab = tab;
   document.querySelectorAll("#navbar button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
-  ["home", "stats", "chat", "party"].forEach(n => { $("#tab-" + n).hidden = n !== tab; });
+  ["home", "stats", "chat", "party", "more"].forEach(n => { $("#tab-" + n).hidden = n !== tab; });
   playIntro();
   moveInd();
   window.scrollTo({ top: 0, behavior: "smooth" });
-  if (tab === "chat") { renderChat(); const l = $("#chatList"); l.scrollTop = l.scrollHeight; }
-  else if (S.settings) renderChat();
+  if (tab === "more") renderMore();
+  if (S.settings) renderChat();
 }
+const openMore = () => setTab("more");
 
 /* ---------- language ---------- */
 function buildStatic() {
@@ -1070,9 +1455,11 @@ function buildStatic() {
   document.title = t("app.title");
   document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
   document.querySelectorAll("[data-i18n-ph]").forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
-  $("#quick").replaceChildren(...[15, 30, 45, 60, 90].map(m => h("button", { type: "button", text: `${m}${t("u.m")}`, onclick: () => { $("#minutes").value = m; updatePreview(); } })));
+  const keep = $("#mMin").value || "30";
+  $("#mMin").replaceChildren(...[15, 30, 45, 60, 90, 120].map(m => h("option", { value: String(m), text: `${m} ${t("u.m")}` })));
+  $("#mMin").value = keep;
+  $("#focusQuick").replaceChildren(...[15, 25, 45, 60, 90].map(m => h("button", { type: "button", text: `${m} ${t("u.m")}`, onclick: () => { $("#focusMin").value = m; } })));
   $("#chatQuick").replaceChildren(...QUICK_KEYS.map(k => h("button", { type: "button", text: t(k), onclick: () => sendChat(t(k)) })));
-  updatePreview();
   requestAnimationFrame(moveInd);
 }
 function toggleLang() {
@@ -1080,15 +1467,16 @@ function toggleLang() {
   LS.set("lang", LANG);
   buildStatic();
   S.gateKey = null;
+  if (S.focus) showFocus();
   renderAll();
 }
 
 /* ---------- parties: create / join / leave ---------- */
 let unsubs = [];
 function resetData() {
-  S.players = {}; S.logs = []; S.settings = null; S.result = null; S.info = null; S.chat = []; S.chatTo = null;
+  S.players = {}; S.logs = []; S.settings = null; S.result = null; S.info = null; S.chat = []; S.thread = null; S.seen = {}; S.focusRestored = false;
   S.loaded = { players: false, logs: false, settings: false, result: false, info: false, chat: false };
-  S.animatedTs = null; S.lastPts = {}; S.lastLvl = {}; S.mainShown = false; S.kicked = false; S.jcTried = false;
+  S.animatedTs = null; S.lastPts = {}; S.lastLvl = {}; S.mainShown = false; S.kicked = false; S.jcTried = false; S.notified = new Set();
 }
 function stopListening() { unsubs.forEach(u => { try { u(); } catch (e) {} }); unsubs = []; }
 async function tryDo(fn) { try { await fn(); return true; } catch (e) { return false; } }
@@ -1173,14 +1561,9 @@ function listen() {
   unsubs.push(db.collection(P("logs")).limit(1000).onSnapshot(snap => { S.logs = snap.docs.map(d => ({ id: d.id, ...d.data() })); S.loaded.logs = true; renderAll(); }, onErr));
   unsubs.push(db.doc(P("meta/settings")).onSnapshot(snap => { S.settings = snap.exists ? snap.data() : null; S.loaded.settings = true; renderAll(); }, onErr));
   let firstChat = true;
-  unsubs.push(db.collection(P("chat")).orderBy("ts", "desc").limit(100).onSnapshot(snap => {
+  unsubs.push(db.collection(P("chat")).orderBy("ts", "desc").limit(300).onSnapshot(snap => {
     S.chat = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (!firstChat && S.tab !== "chat") {
-      snap.docChanges().filter(c => c.type === "added").forEach(c => {
-        const m = c.doc.data();
-        if (m && m.uid !== S.myId && (!m.to || m.to === S.myId)) toast(t(m.to ? "chat.notif.priv" : "chat.notif", { name: playerName(m.uid), text: String(m.text).slice(0, 60) }));
-      });
-    }
+    if (!firstChat) snap.docChanges().forEach(c => onChatChange(c.type, { id: c.doc.id, ...c.doc.data() }));
     firstChat = false;
     S.loaded.chat = true; renderAll();
   }, onErr));
@@ -1195,31 +1578,19 @@ function listen() {
 /* ---------- static wiring ---------- */
 document.querySelectorAll("#navbar button").forEach(b => b.addEventListener("click", () => setTab(b.dataset.t)));
 window.addEventListener("resize", moveInd);
-["#minutes", "#diff", "#done"].forEach(s => { $(s).addEventListener("input", updatePreview); $(s).addEventListener("change", updatePreview); });
 EMOJIS.forEach(e => $("#chatEmo").append(h("button", { type: "button", text: e, onclick: () => { const i = $("#chatIn"); i.value += e; i.focus(); } })));
 $("#chatSend").addEventListener("click", async () => { const i = $("#chatIn"); const v = i.value; i.value = ""; await sendChat(v); i.focus(); });
 $("#chatIn").addEventListener("keydown", async e => { if (e.key === "Enter") { e.preventDefault(); const i = $("#chatIn"); const v = i.value; i.value = ""; await sendChat(v); } });
-$("#logBtn").addEventListener("click", async () => {
-  const btn = $("#logBtn");
-  const minutes = Math.round(+$("#minutes").value || 0);
-  const subject = $("#subject").value.trim();
-  if (!subject) { $("#subject").classList.add("shake"); $("#subject").focus(); setTimeout(() => $("#subject").classList.remove("shake"), 400); return toast(t("log.need.subject")); }
-  if (minutes < 5) { $("#minutes").classList.add("shake"); setTimeout(() => $("#minutes").classList.remove("shake"), 400); return toast(t("log.need.min")); }
-  const day = $("#day").value || today();
-  if (day < S.settings.start || day > S.settings.end) return toast(t("log.bad.day"));
-  const mult = +$("#diff").value, done = $("#done").checked;
-  const points = logPoints(minutes, mult, done);
-  btn.disabled = true;
-  const res = await addLog({ uid: S.myId, day, subject, minutes, mult, done, points, note: $("#note").value.trim(), ts: Date.now(), round: S.settings.round });
-  btn.disabled = false;
-  if (res !== undefined) {
-    flyPoints(btn, points);
-    burst(btn, ["⭐", "✨", "🔥", "📚", "💪"]);
-    toast(t("log.earned", { n: points }));
-    $("#minutes").value = ""; $("#note").value = ""; $("#done").checked = false;
-    updatePreview();
-  }
-});
+$("#chatBack").addEventListener("click", () => { S.thread = null; renderChat(); });
+$("#mAdd").addEventListener("click", addMission);
+$("#mSubject").addEventListener("keydown", e => { if (e.key === "Enter") addMission(); });
+$("#focusGo").addEventListener("click", () => startFocus(+$("#focusMin").value));
+document.addEventListener("visibilitychange", () => { onVis(); if (!document.hidden) checkReminder(); });
+setInterval(checkReminder, 30000);
+setInterval(() => {   // keep the 🌙 badges honest when someone's focus time runs out
+  const sig = Object.keys(S.players).filter(focusOn).sort().join(",");
+  if (sig !== S.focusSig) { S.focusSig = sig; if (gateScreen() === "main") renderAll(); }
+}, 10000);
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); S.installEvt = e; renderInstall(); });
 window.addEventListener("appinstalled", () => { S.installEvt = null; renderInstall(); });
 
