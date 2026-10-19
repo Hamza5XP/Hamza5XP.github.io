@@ -74,7 +74,7 @@ const GOAL_BONUS = 10, DONE_BONUS = 10, MAX_PLAYERS = 8;
 const COLORS = ["#3b7686", "#d48a57", "#3d9971", "#cb5b5b", "#c79f3a", "#5f86c9", "#b0679a", "#7a8088"];
 const APP_VERSION = "4.0.0", APP_BUILD = "Oct 2026";
 const FOCUS_BONUS_PER = 10, PICKUP_LOSS = 1;
-const AVATARS = ["🦢", "🐼", "🦩", "🦄", "🐠", "🕷", "👾", "🐣", "🐬", "🦔", "🦩", "☠", "👻", "🐱‍💻"];
+const AVATARS = ["🦢", "🐼", "🦩", "🦄", "🐠", "🕷", "👾", "🐣", "🐬", "🦔", "🦩", "☠", "👻", "🐱‍💻", "🦚", "🐭", "🥱", "🤡"];
 const MEDALS = ["🥇", "🥈", "🥉"];
 
 /* ---------- state ---------- */
